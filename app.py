@@ -2,11 +2,13 @@ import cv2
 import av
 import numpy as np
 import mediapipe as mp
+# Direct imports to fix the AttributeError on Python 3.12
 from mediapipe.python.solutions import hands as mp_hands
 from mediapipe.python.solutions import drawing_utils as mp_drawing
 import streamlit as st
 from streamlit_webrtc import webrtc_streamer, WebRtcMode
 import pickle
+import gzip
 import time
 
 # --- 1. SETUP ---
@@ -14,10 +16,15 @@ st.set_page_config(page_title="Neural Sign Translator", layout="wide")
 
 @st.cache_resource
 def load_vision_model():
+    # Matches the filename of your compressed upload
+    model_path = './model_compressed.p.gz' 
     try:
-        with open('./model.p', 'rb') as f:
-            return pickle.load(f)['model']
-    except:
+        # Decompressing the .gz file on the fly
+        with gzip.open(model_path, 'rb') as f:
+            model_dict = pickle.load(f)
+            return model_dict['model']
+    except Exception as e:
+        st.error(f"Error loading model: {e}. Ensure 'model_compressed.p.gz' is in your GitHub repo.")
         return None
 
 model = load_vision_model()
@@ -55,6 +62,7 @@ class SignProcessor:
                 data_aux.append(lm.y - min(y_))
 
             if model:
+                # Ensure input length matches model expectations (84 features)
                 input_data = np.asarray(data_aux[:84])
                 if len(input_data) < 84:
                     input_data = np.pad(input_data, (0, 84 - len(input_data)))
@@ -64,7 +72,7 @@ class SignProcessor:
                     char = self.labels.get(int(prediction), "?")
                     self.current_char = char
 
-                    # --- 35 FRAME LOGIC ---
+                    # Stability Logic (35 Frames / ~1.2 Seconds)
                     if char == self.prev:
                         if not self.cooldown:
                             self.frames += 1
@@ -73,13 +81,12 @@ class SignProcessor:
                         self.prev = char
                         self.cooldown = False 
 
-                    # Updated to exactly 35 frames
                     if self.frames >= 35:
                         self.generated_text += char
                         self.frames = 0
                         self.cooldown = True 
                     
-                    # Visual progress bar on the video feed
+                    # Visual Feedback on Video
                     display_color = (0, 255, 0) if self.cooldown else (0, 165, 255)
                     cv2.putText(img, f"Stability: {self.frames}/35", (10, 450), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.8, display_color, 2)
@@ -91,8 +98,8 @@ class SignProcessor:
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-# --- 3. INTERFACE ---
-st.title("🤟 Neural Sign Translator")
+# --- 3. THE INTERFACE ---
+st.title("🤟 Neural Sign Word Builder")
 col_vid, col_txt = st.columns([2, 1])
 
 with col_vid:
@@ -106,14 +113,14 @@ with col_vid:
     )
 
 with col_txt:
-    st.subheader("Detected Sign")
+    st.subheader("Current Detected Sign")
     char_spot = st.empty()
     
     st.markdown("---")
-    st.subheader("Built Word")
+    st.subheader("Built Sentence / Word")
     text_box = st.empty() 
     
-    if st.button("🗑️ Clear Word", use_container_width=True):
+    if st.button("🗑️ Clear Everything", use_container_width=True):
         if ctx.video_processor:
             ctx.video_processor.generated_text = ""
         st.rerun()
@@ -122,14 +129,15 @@ with col_txt:
 if ctx.state.playing:
     while True:
         if ctx.video_processor:
+            # 1. Update the Big Letter
             curr = ctx.video_processor.current_char
-            char_spot.markdown(f"<h1 style='text-align: center; color: #007aff; font-size: 80px;'>{curr if curr else '-'}</h1>", unsafe_allow_html=True)
+            char_spot.markdown(f"<h1 style='text-align: center; color: #007aff; font-size: 100px;'>{curr if curr else '-'}</h1>", unsafe_allow_html=True)
             
+            # 2. Update the Word Box
             full_text = ctx.video_processor.generated_text
-            # Using a large font for the final word box
             text_box.markdown(f"""
-                <div style='background-color: #f0f2f6; padding: 20px; border-radius: 10px; border-left: 5px solid #007aff;'>
-                    <h2 style='color: #31333F; margin: 0;'>{full_text if full_text else "..."}</h2>
+                <div style='background-color: #f0f2f6; padding: 25px; border-radius: 10px; border-left: 8px solid #007aff;'>
+                    <h2 style='color: #31333F; margin: 0; font-family: monospace;'>{full_text if full_text else "Awaiting input..."}</h2>
                 </div>
             """, unsafe_allow_html=True)
         
