@@ -79,7 +79,7 @@ class SignProcessor:
                     
                     # Visual feedback on screen
                     color = (0, 255, 0) if self.cooldown else (255, 255, 255)
-                    cv2.putText(img, f"Locking: {self.frames}/45", (10, 450), 
+                    cv2.putText(img, f"Locking: {self.frames}/35", (10, 350), 
                                 cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
                 except: pass
         else:
