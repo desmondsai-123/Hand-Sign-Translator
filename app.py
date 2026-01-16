@@ -36,7 +36,7 @@ class SignProcessor:
         self.generated_text = "" 
         self.prev = ""           
         self.frames = 0          
-        self.cooldown = False    # New: Prevents double-typing the same instance
+        self.cooldown = False    
 
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
@@ -48,9 +48,11 @@ class SignProcessor:
             mp_drawing.draw_landmarks(img, hand_lms, mp_hands.HAND_CONNECTIONS)
 
             data_aux = []
-            x_ = [lm.x for lm in hand_lms.landmark]; y_ = [lm.y for lm in hand_lms.landmark]
+            x_ = [lm.x for lm in hand_lms.landmark]
+            y_ = [lm.y for lm in hand_lms.landmark]
             for lm in hand_lms.landmark:
-                data_aux.append(lm.x - min(x_)); data_aux.append(lm.y - min(y_))
+                data_aux.append(lm.x - min(x_))
+                data_aux.append(lm.y - min(y_))
 
             if model:
                 input_data = np.asarray(data_aux[:84])
@@ -62,35 +64,35 @@ class SignProcessor:
                     char = self.labels.get(int(prediction), "?")
                     self.current_char = char
 
-                    # --- SLOWER LOGIC ---
+                    # --- 35 FRAME LOGIC ---
                     if char == self.prev:
                         if not self.cooldown:
                             self.frames += 1
                     else:
                         self.frames = 0
                         self.prev = char
-                        self.cooldown = False # Reset cooldown when hand moves to new sign
+                        self.cooldown = False 
 
-                    # THRESHOLD INCREASED TO 45 (Approx 1.5 seconds)
+                    # Updated to exactly 35 frames
                     if self.frames >= 35:
                         self.generated_text += char
                         self.frames = 0
-                        self.cooldown = True # Stop typing until the sign changes or hand leaves
+                        self.cooldown = True 
                     
-                    # Visual feedback on screen
-                    color = (0, 255, 0) if self.cooldown else (255, 255, 255)
-                    cv2.putText(img, f"Locking: {self.frames}/35", (10, 350), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+                    # Visual progress bar on the video feed
+                    display_color = (0, 255, 0) if self.cooldown else (0, 165, 255)
+                    cv2.putText(img, f"Stability: {self.frames}/35", (10, 450), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.8, display_color, 2)
                 except: pass
         else:
             self.current_char = ""
             self.frames = 0 
-            self.cooldown = False # Reset when hand leaves screen
+            self.cooldown = False 
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-# --- 3. THE INTERFACE ---
-st.title("🤟 Stable Sign Translator")
+# --- 3. INTERFACE ---
+st.title("🤟 Neural Sign Translator")
 col_vid, col_txt = st.columns([2, 1])
 
 with col_vid:
@@ -104,14 +106,14 @@ with col_vid:
     )
 
 with col_txt:
-    st.subheader("Current Sign")
+    st.subheader("Detected Sign")
     char_spot = st.empty()
     
     st.markdown("---")
-    st.subheader("Final Word")
+    st.subheader("Built Word")
     text_box = st.empty() 
     
-    if st.button("🗑️ Clear word", use_container_width=True):
+    if st.button("🗑️ Clear Word", use_container_width=True):
         if ctx.video_processor:
             ctx.video_processor.generated_text = ""
         st.rerun()
@@ -124,7 +126,12 @@ if ctx.state.playing:
             char_spot.markdown(f"<h1 style='text-align: center; color: #007aff; font-size: 80px;'>{curr if curr else '-'}</h1>", unsafe_allow_html=True)
             
             full_text = ctx.video_processor.generated_text
-            text_box.info(full_text if full_text else "Hold a sign for 1.5s to add it...")
+            # Using a large font for the final word box
+            text_box.markdown(f"""
+                <div style='background-color: #f0f2f6; padding: 20px; border-radius: 10px; border-left: 5px solid #007aff;'>
+                    <h2 style='color: #31333F; margin: 0;'>{full_text if full_text else "..."}</h2>
+                </div>
+            """, unsafe_allow_html=True)
         
         if not ctx.state.playing:
             break
