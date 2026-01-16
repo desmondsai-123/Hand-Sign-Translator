@@ -32,10 +32,11 @@ class SignProcessor:
             model_complexity=0 
         )
         self.labels = {i: chr(65+i) for i in range(26)}
-        self.current_char = ""    # Character currently being signed
-        self.generated_text = "" # The full word/sentence built so far
-        self.prev = ""           # To track frame-by-frame stability
-        self.frames = 0          # Counter for how long sign is held
+        self.current_char = ""    
+        self.generated_text = "" 
+        self.prev = ""           
+        self.frames = 0          
+        self.cooldown = False    # New: Prevents double-typing the same instance
 
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
@@ -47,11 +48,9 @@ class SignProcessor:
             mp_drawing.draw_landmarks(img, hand_lms, mp_hands.HAND_CONNECTIONS)
 
             data_aux = []
-            x_ = [lm.x for lm in hand_lms.landmark]
-            y_ = [lm.y for lm in hand_lms.landmark]
+            x_ = [lm.x for lm in hand_lms.landmark]; y_ = [lm.y for lm in hand_lms.landmark]
             for lm in hand_lms.landmark:
-                data_aux.append(lm.x - min(x_))
-                data_aux.append(lm.y - min(y_))
+                data_aux.append(lm.x - min(x_)); data_aux.append(lm.y - min(y_))
 
             if model:
                 input_data = np.asarray(data_aux[:84])
@@ -63,29 +62,35 @@ class SignProcessor:
                     char = self.labels.get(int(prediction), "?")
                     self.current_char = char
 
-                    # --- SENTENCE BUILDING LOGIC ---
+                    # --- SLOWER LOGIC ---
                     if char == self.prev:
-                        self.frames += 1
+                        if not self.cooldown:
+                            self.frames += 1
                     else:
                         self.frames = 0
                         self.prev = char
+                        self.cooldown = False # Reset cooldown when hand moves to new sign
 
-                    # If sign is held for 20 frames (~1 second), add to sentence
-                    if self.frames == 20:
+                    # THRESHOLD INCREASED TO 45 (Approx 1.5 seconds)
+                    if self.frames >= 45:
                         self.generated_text += char
                         self.frames = 0
+                        self.cooldown = True # Stop typing until the sign changes or hand leaves
                     
-                    cv2.putText(img, f"Held: {self.frames}/20", (10, 450), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                    # Visual feedback on screen
+                    color = (0, 255, 0) if self.cooldown else (255, 255, 255)
+                    cv2.putText(img, f"Locking: {self.frames}/45", (10, 450), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
                 except: pass
         else:
             self.current_char = ""
-            self.frames = 0 # Reset if hand leaves screen
+            self.frames = 0 
+            self.cooldown = False # Reset when hand leaves screen
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
 # --- 3. THE INTERFACE ---
-st.title("🤟 AI Sign Language Translator")
+st.title("🤟 Stable Sign Translator")
 col_vid, col_txt = st.columns([2, 1])
 
 with col_vid:
@@ -99,15 +104,14 @@ with col_vid:
     )
 
 with col_txt:
-    st.subheader("Current Prediction")
-    char_spot = st.empty() # For the single big letter
+    st.subheader("Current Sign")
+    char_spot = st.empty()
     
     st.markdown("---")
-    st.subheader("Build Sentence")
-    # THE MAIN TEXT BOX YOU REQUESTED
+    st.subheader("Final Word")
     text_box = st.empty() 
     
-    if st.button("🗑️ Clear Everything", use_container_width=True):
+    if st.button("🗑️ Clear word", use_container_width=True):
         if ctx.video_processor:
             ctx.video_processor.generated_text = ""
         st.rerun()
@@ -116,15 +120,12 @@ with col_txt:
 if ctx.state.playing:
     while True:
         if ctx.video_processor:
-            # 1. Update the big single letter
             curr = ctx.video_processor.current_char
             char_spot.markdown(f"<h1 style='text-align: center; color: #007aff; font-size: 80px;'>{curr if curr else '-'}</h1>", unsafe_allow_html=True)
             
-            # 2. Update the accumulated text box
             full_text = ctx.video_processor.generated_text
-            text_box.info(full_text if full_text else "Sign letters to build a word...")
+            text_box.info(full_text if full_text else "Hold a sign for 1.5s to add it...")
         
         if not ctx.state.playing:
             break
-            
         time.sleep(0.1)
