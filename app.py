@@ -72,7 +72,7 @@ class SignProcessor:
                         self.cooldown = False # Reset cooldown when hand moves to new sign
 
                     # THRESHOLD INCREASED TO 45 (Approx 1.5 seconds)
-                    if self.frames >= 45:
+                    if self.frames >= 35:
                         self.generated_text += char
                         self.frames = 0
                         self.cooldown = True # Stop typing until the sign changes or hand leaves
