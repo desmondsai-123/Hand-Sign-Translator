@@ -1,4 +1,3 @@
-Desmond, [14/1/2026 11:51 PM]
 import pickle
 import cv2
 import mediapipe as mp
@@ -130,7 +129,6 @@ class ModernProcessor(VideoTransformerBase):
         cv2.rectangle(overlay, (0, h_img-100), (w_img, h_img), (255, 255, 255), -1)
         cv2.addWeighted(overlay, 0.8, img, 0.2, 0, img)
 
-Desmond, [14/1/2026 11:51 PM]
 if results.multi_hand_landmarks:
             data_aux, x_, y_ = [], [], []
             for hand_landmarks in results.multi_hand_landmarks:
