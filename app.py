@@ -4,6 +4,7 @@ import numpy as np
 import mediapipe as mp
 from mediapipe.python.solutions import hands as mp_hands
 from mediapipe.python.solutions import drawing_utils as mp_drawing
+from mediapipe.python.solutions import drawing_styles as mp_drawing_styles
 import streamlit as st
 from streamlit_webrtc import webrtc_streamer, WebRtcMode
 import pickle
@@ -31,12 +32,11 @@ class SignProcessor:
     def __init__(self):
         self.hands = mp_hands.Hands(
             static_image_mode=False,
-            max_num_hands=2, # Parity with inference_classifier
+            max_num_hands=2,
             min_detection_confidence=0.5,
             model_complexity=0 
         )
-        
-        # FULL LABEL PARITY
+        # Full Label Map from inference_classifier.py
         self.labels_list = {
             0: "A", 1: "B", 2: "C", 3: "D", 4: "E", 5: "F", 6: "G", 7: "H", 8: "I", 9: "J", 
             10: "K", 11: "L", 12: "M", 13: "N", 14: "O", 15: "P", 16: "Q", 17: "R", 18: "S", 
@@ -46,115 +46,70 @@ class SignProcessor:
             36: "Well", 37: "Come", 38: "Birthday", 39: "Goodbye", 40: "Night", 
             41: "Morning", 42: "Please (Welcome)", 43: "Thank you", 44: "Please (Help)", 
         }
-
-        self.activators = {
-            ("Hello", "Waalaikumussalam"): "Assalamualaikum",
-            ("Well", "Morning"): "Good Morning",
-            ("Well", "Night"): "Good Night",
-            ("Well", "Birthday"): "Happy Birthday",
-            ("Well", "Come"): "Welcome",
-            ("How are you?", "I'm fine"): "How are you?",
-        }
-        
-        self.modifiers = {"J": "I", "Please (Welcome)": "Goodbye"}
-        self.hidden_signs = ["How are you?", "I don't want to renumber everything so this is hidden"]
-
-        # State management
         self.generated_text = ""
         self.current_char = ""
-        self.last_valid_entry = None
-        self.last_printed_char = None
-        self.was_last_hidden = False
-        self.consecutive_frames = 0
-        self.previous_prediction = None
-        self.current_sequence_base = None
-        self.sequence_step = -1
 
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         results = self.hands.process(img_rgb)
+        
+        # This list will hold the coordinates for the model
         data_aux = []
 
-        if results.multi_hand_landmarks and model:
-            # Process up to 2 hands to get 84 features (42 points * 2 coords)
-            for hand_lms in results.multi_hand_landmarks[:2]:
-                x_ = [lm.x for lm in hand_lms.landmark]
-                y_ = [lm.y for lm in hand_lms.landmark]
-                for lm in hand_lms.landmark:
+        if results.multi_hand_landmarks:
+            for hand_landmarks in results.multi_hand_landmarks:
+                # --- THIS SECTION ADDS THE VISUAL TRACKING ---
+                mp_drawing.draw_landmarks(
+                    img,
+                    hand_landmarks,
+                    mp_hands.HAND_CONNECTIONS,
+                    mp_drawing_styles.get_default_hand_landmarks_style(),
+                    mp_drawing_styles.get_default_hand_connections_style()
+                )
+                
+                # Extract coordinates for prediction
+                x_ = [lm.x for lm in hand_landmarks.landmark]
+                y_ = [lm.y for lm in hand_landmarks.landmark]
+                for lm in hand_landmarks.landmark:
                     data_aux.append(lm.x - min(x_))
                     data_aux.append(lm.y - min(y_))
-            
-            # Fill remaining features with 0 if only one hand is detected
-            while len(data_aux) < 84:
-                data_aux.append(0.0)
 
-            prediction_proba = model.predict_proba([np.asarray(data_aux)])
-            confidence = np.max(prediction_proba)
+            # Logic to ensure model gets 84 features (from your classifier logic)
+            if model:
+                temp_data = data_aux.copy()
+                while len(temp_data) < 84:
+                    temp_data.append(0.0)
+                
+                prediction_proba = model.predict_proba([np.asarray(temp_data)])
+                confidence = np.max(prediction_proba)
+                if confidence > 0.5:
+                    idx = int(np.argmax(prediction_proba))
+                    self.current_char = self.labels_list.get(idx, "?")
 
-            if confidence > 0.5:
-                idx = int(np.argmax(prediction_proba))
-                label = self.labels_list.get(idx, "?")
-                self.current_char = label
-
-                if label == self.previous_prediction:
-                    self.consecutive_frames += 1
-                else:
-                    self.consecutive_frames = 0
-                    self.previous_prediction = label
-
-                if self.consecutive_frames == 10:
-                    # 1. SEQUENCE LOGIC (Z_0 -> Z_1)
-                    if "_" in label and label not in self.hidden_signs:
-                        base, step = label.split("_")
-                        if step == "0":
-                            self.current_sequence_base, self.sequence_step = base, 0
-                        elif step == "1" and self.current_sequence_base == base:
-                            self.generated_text += " " + base
-                            self.last_valid_entry, self.last_printed_char = base, base
-                    
-                    # 2. NORMAL LOGIC
-                    elif label != self.last_printed_char:
-                        if label in self.hidden_signs:
-                            self.last_valid_entry, self.was_last_hidden = label, True
-                        else:
-                            combo_key = (self.last_valid_entry, label)
-                            if combo_key in self.activators:
-                                words = self.generated_text.strip().split(" ")
-                                if words and not self.was_last_hidden: words.pop()
-                                self.generated_text = " ".join(words) + " " + self.activators[combo_key]
-                                self.last_valid_entry = self.activators[combo_key]
-                            else:
-                                self.generated_text += " " + label
-                                self.last_valid_entry = label
-                            self.was_last_hidden = False
-                        self.last_printed_char = label
-        
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
 # --- 3. THE INTERFACE ---
-st.title("🤟 Neural Sign Word Builder")
+st.title("🤟 Real-Time Hand Tracking & Translation")
 col_vid, col_txt = st.columns([2, 1])
 
 with col_vid:
     ctx = webrtc_streamer(
-        key="sign-translate",
+        key="hand-tracking",
         mode=WebRtcMode.SENDRECV,
         video_processor_factory=SignProcessor,
-        async_processing=False,
+        async_processing=False, # Stabilizes high-frame-rate drawing
         rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
         media_stream_constraints={"video": True, "audio": False},
     )
 
 with col_txt:
-    st.subheader("Current Sign")
+    st.subheader("Current Detected Sign")
     char_spot = st.empty()
-    st.subheader("Sentence")
+    st.subheader("Accumulated Sentence")
     text_box = st.empty()
-    if st.button("Clear"):
-        if ctx.video_processor: ctx.video_processor.generated_text = ""
 
-# --- 4. SAFE UI UPDATE ---
+# --- 4. THE UI UPDATE LOOP ---
 if ctx.state.playing:
     while ctx.state.playing:
         if ctx.video_processor:
