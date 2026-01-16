@@ -19,17 +19,61 @@ mp_drawing_styles = mp.solutions.drawing_styles
 
 hands = mp_hands.Hands(static_image_mode=True, max_num_hands=2, min_detection_confidence=0.3)
 
-# --- LABELS ---
-labels_list = ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V", "W", "X", "Y", "Z"]
+# --- LABELS (FIXED NUMBERING 0-49) ---
+labels_list = {
+    0: "A", 1: "B", 2: "C", 3: "D", 4: "E", 5: "F", 6: "G", 7: "H", 8: "I", 9: "J", 
+    10: "K", 11: "L", 12: "M", 13: "N", 14: "O", 15: "P", 16: "Q", 17: "R", 18: "S", 
+    19: "T", 20: "U", 21: "V", 22: "W", 23: "X", 24: "Y", 25: "Z_0", 26: "Z_1", 
+    27: "How are you?", 
+    28: "Waalaikumussalam", 
+    29: "Hello", 
+    30: "I'm fine", 
+    31: "Excuse me", 
+    32: "Sorry", 
+    33: "Salam", 
+    34: "Regards", 
+    35: "You're welcome", 
+    36: "Well", 
+    37: "Come", 
+    38: "Birthday", 
+    39: "Goodbye", 
+    40: "Night", 
+    41: "Morning", 
+    42: "Please (Welcome)", 
+    43: "Thank you", 
+    44: "Please (Help)", 
+}
 
-# --- PREREQUISITE RULES ---
-# Format: { "Target": "Required_Previous" }
+# --- 1. HIDDEN SIGNS (Silent Context) ---
+# Signs that don't print but set up a context for the next sign.
+hidden_signs = [
+    "I don't want to renumber everything so this is hidden",
+    "How are you?",
+]
+
+# --- 2. MODIFIERS (Strict Blocking) ---
+# These words CANNOT exist alone. They MUST follow their prerequisite.
 modifiers = {
-    "J": "I"   # J will REPLACE I
+    "J": "I",
+    "Please (Welcome)": "Goodbye"
+}
+
+# --- 3. ACTIVATORS (Merging / Optional Combination) ---
+# These words CAN exist alone. 
+# BUT, if they follow a specific word, they merge into a new word.
+# Format: { ("Previous_Word", "Current_Word"): "Resulting_Output" }
+activators = {
+    # If "Hello" is on screen, and you sign "Waalaikumussalam", it becomes "Assalamualaikum"
+    ("Hello", "Waalaikumussalam"): "Assalamualaikum",
+    ("Well", "Morning"): "Good Morning",
+    ("Well", "Night"): "Good Night",
+    ("Well", "Birthday"): "Happy Birthday",
+    ("Well", "Come"): "Welcome",
+    ("How are you?", "I'm fine"): "How are you?",
 }
 
 # --- CONFIGURATION ---
-probability_threshold = 0.7 
+probability_threshold = 0.5
 stability_threshold = 10     
 reset_threshold = 10         
 
@@ -41,6 +85,7 @@ nothing_consecutive_frames = 0
 # Variables for the "Sequence" logic
 last_printed_char = None      
 last_valid_entry = None       
+was_last_hidden = False       
 
 current_sequence_base = None  
 sequence_step = -1            
@@ -100,53 +145,83 @@ while True:
             
             # Trigger Logic
             if consecutive_frames == stability_threshold:
-                
-                # CASE 1: Sequence Parts
-                if "_" in predicted_label:
+
+                # --- 1. SEQUENCE LOGIC (Z_0, Z_1) ---
+                if "_" in predicted_label and predicted_label not in hidden_signs: 
                     base_name, step_str = predicted_label.split("_")
-                    step = int(step_str)
+                    if step_str.isdigit():
+                        step = int(step_str)
+                        if step == 0:
+                            current_sequence_base = base_name
+                            sequence_step = 0
+                        elif step == 1 and current_sequence_base == base_name and sequence_step == 0:
+                            print(base_name, end=" ", flush=True)
+                            sequence_step = -1 
+                            current_sequence_base = None
+                            last_printed_char = base_name 
+                            last_valid_entry = base_name
+                            was_last_hidden = False
 
-                    if step == 0:
-                        current_sequence_base = base_name
-                        sequence_step = 0
-                    
-                    elif step == 1 and current_sequence_base == base_name and sequence_step == 0:
-                        print(base_name, end=" ", flush=True)
-                        sequence_step = -1 
-                        current_sequence_base = None
-                        last_printed_char = base_name 
-                        last_valid_entry = base_name 
-
-                # CASE 2: Normal Characters
+                # --- 2. STANDARD LOGIC ---
                 else:
                     current_sequence_base = None 
                     sequence_step = -1
                     
                     if predicted_label != last_printed_char:
                         
-                        # --- PREREQUISITE SYSTEM START ---
-                        allowed_to_print = True
-                        is_replacement = False # New flag
-
-                        if predicted_label in modifiers:
-                            required_prev = modifiers[predicted_label]
-                            
-                            if last_valid_entry != required_prev:
-                                allowed_to_print = False
-                            else:
-                                is_replacement = True # It matched, so we enable replacement mode
-                        # --- PREREQUISITE SYSTEM END ---
-
-                        if allowed_to_print:
-                            # If this is a replacement (J replacing I), backspace the old one
-                            if is_replacement:
-                                # Calculate length to delete (Letter length + 1 for the space we added)
-                                delete_len = len(last_valid_entry) + 1
-                                print("\b" * delete_len, end="", flush=True)
-
-                            print(predicted_label, end=" ", flush=True)
+                        # A. Check Hidden Signs (Context)
+                        if predicted_label in hidden_signs:
+                            last_valid_entry = predicted_label
+                            was_last_hidden = True
                             last_printed_char = predicted_label
-                            last_valid_entry = predicted_label 
+                        
+                        else:
+                            should_print = True
+                            is_modifier_replace = False
+                            
+                            # B. Check Strict Modifiers (Blocking)
+                            if predicted_label in modifiers:
+                                required_prev = modifiers[predicted_label]
+                                if last_valid_entry == required_prev:
+                                    is_modifier_replace = True
+                                else:
+                                    should_print = False # Block if requirement not met
+
+                            if should_print:
+                                # C. Check Activators (Merging)
+                                combo_key = (last_valid_entry, predicted_label)
+                                
+                                if combo_key in activators:
+                                    # Case: MERGE TRIGGERED (e.g. Hello + Waalaik... -> Assalam...)
+                                    new_word = activators[combo_key]
+                                    
+                                    # If previous word was visible (like "Hello"), delete it
+                                    if not was_last_hidden:
+                                        delete_len = len(last_valid_entry) + 1
+                                        print("\b" * delete_len, end="", flush=True)
+                                    
+                                    # Print the new Merged Word
+                                    print(new_word, end=" ", flush=True)
+                                    last_valid_entry = new_word
+                                    was_last_hidden = False
+                                
+                                elif is_modifier_replace:
+                                    # Case: STRICT MODIFIER (e.g. Well + Birthday -> Happy Birthday)
+                                    if not was_last_hidden:
+                                        delete_len = len(last_valid_entry) + 1
+                                        print("\b" * delete_len, end="", flush=True)
+                                    
+                                    print(predicted_label, end=" ", flush=True)
+                                    last_valid_entry = predicted_label
+                                    was_last_hidden = False
+
+                                else:
+                                    # Case: NORMAL PRINT
+                                    print(predicted_label, end=" ", flush=True)
+                                    last_valid_entry = predicted_label
+                                    was_last_hidden = False
+                                
+                                last_printed_char = predicted_label
 
             # Visual Feedback
             x1 = int(min(x_) * W) - 10
@@ -164,7 +239,7 @@ while True:
         
         if nothing_consecutive_frames > reset_threshold:
             last_printed_char = None
-            # Do NOT reset last_valid_entry
+            # We preserve last_valid_entry to allow combos across pauses
 
     cv2.imshow('frame', frame)
     if cv2.waitKey(1) & 0xFF == ord('q'):
