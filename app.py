@@ -10,7 +10,7 @@ import pickle
 import time
 
 # --- 1. SETUP ---
-st.set_page_config(page_title="VisionAI Sign Translator", layout="wide")
+st.set_page_config(page_title="Neural Sign Translator", layout="wide")
 
 @st.cache_resource
 def load_vision_model():
@@ -32,9 +32,10 @@ class SignProcessor:
             model_complexity=0 
         )
         self.labels = {i: chr(65+i) for i in range(26)}
-        self.current_char = "" # This stores the last prediction
-        self.prev = ""
-        self.frames = 0
+        self.current_char = ""    # Character currently being signed
+        self.generated_text = "" # The full word/sentence built so far
+        self.prev = ""           # To track frame-by-frame stability
+        self.frames = 0          # Counter for how long sign is held
 
     def recv(self, frame):
         img = frame.to_ndarray(format="bgr24")
@@ -60,22 +61,34 @@ class SignProcessor:
                 try:
                     prediction = model.predict([input_data])[0]
                     char = self.labels.get(int(prediction), "?")
-                    
-                    # Update the attribute directly for the main script to read
                     self.current_char = char
-                    cv2.putText(img, char, (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+                    # --- SENTENCE BUILDING LOGIC ---
+                    if char == self.prev:
+                        self.frames += 1
+                    else:
+                        self.frames = 0
+                        self.prev = char
+
+                    # If sign is held for 20 frames (~1 second), add to sentence
+                    if self.frames == 20:
+                        self.generated_text += char
+                        self.frames = 0
+                    
+                    cv2.putText(img, f"Held: {self.frames}/20", (10, 450), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
                 except: pass
         else:
             self.current_char = ""
+            self.frames = 0 # Reset if hand leaves screen
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
 # --- 3. THE INTERFACE ---
-st.title("Sign Language Translator")
+st.title("🤟 AI Sign Language Translator")
 col_vid, col_txt = st.columns([2, 1])
 
 with col_vid:
-    # We assign this to 'ctx' to access the processor later
     ctx = webrtc_streamer(
         key="sign-translate",
         mode=WebRtcMode.SENDRECV,
@@ -86,27 +99,32 @@ with col_vid:
     )
 
 with col_txt:
-    st.subheader("Detected Sign")
-    # A placeholder that we will update in the loop below
-    char_placeholder = st.empty()
+    st.subheader("Current Prediction")
+    char_spot = st.empty() # For the single big letter
     
-    if st.button("Clear Screen"):
+    st.markdown("---")
+    st.subheader("Build Sentence")
+    # THE MAIN TEXT BOX YOU REQUESTED
+    text_box = st.empty() 
+    
+    if st.button("🗑️ Clear Everything", use_container_width=True):
+        if ctx.video_processor:
+            ctx.video_processor.generated_text = ""
         st.rerun()
 
 # --- 4. THE UI UPDATE LOOP ---
-# This loop runs while the camera is active and reads data from the processor
 if ctx.state.playing:
     while True:
         if ctx.video_processor:
-            # Read the current_char from the background thread
-            char = ctx.video_processor.current_char
-            if char:
-                char_placeholder.markdown(f"<h1 style='text-align: center; color: #007aff; font-size: 100px;'>{char}</h1>", unsafe_allow_html=True)
-            else:
-                char_placeholder.info("Show a hand sign to start...")
+            # 1. Update the big single letter
+            curr = ctx.video_processor.current_char
+            char_spot.markdown(f"<h1 style='text-align: center; color: #007aff; font-size: 80px;'>{curr if curr else '-'}</h1>", unsafe_allow_html=True)
+            
+            # 2. Update the accumulated text box
+            full_text = ctx.video_processor.generated_text
+            text_box.info(full_text if full_text else "Sign letters to build a word...")
         
-        # Stop the loop if the user clicks 'STOP' on the camera
         if not ctx.state.playing:
             break
             
-        time.sleep(0.1) # Prevents CPU usage from spiking
+        time.sleep(0.1)
