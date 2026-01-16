@@ -7,7 +7,8 @@ if not os.path.exists(DATA_DIR):
     os.makedirs(DATA_DIR)
 
 dataset_size = 100
-capture_delay = 0.3  # I set this to 2 seconds so you have time to move
+capture_delay = 0.5   # Delay between photos (seconds)
+start_wait_time = 3   # NEW: Delay immediately after pressing 'Q' (seconds)
 
 cap = cv2.VideoCapture(0)
 
@@ -31,7 +32,6 @@ while True:
             if not ret:
                 break
 
-            # Instruction text
             cv2.putText(frame, f'Class {j}: Press "Q" to start', (50, 50), 
                         cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 2)
             cv2.imshow('frame', frame)
@@ -39,26 +39,45 @@ while True:
             if cv2.waitKey(25) == ord('q'):
                 break
 
+        # --- NEW: GET READY COUNTDOWN ---
+        print("Starting countdown...")
+        start_time = time.time()
+        while time.time() - start_time < start_wait_time:
+            ret, frame = cap.read()
+            if not ret:
+                break
+            
+            # Calculate time left for the "Get Ready" phase
+            time_left = start_wait_time - (time.time() - start_time)
+            
+            # Display big red text
+            cv2.putText(frame, f"GET READY: {int(time_left) + 1}", (100, 200), 
+                        cv2.FONT_HERSHEY_SIMPLEX, 2.0, (0, 0, 255), 4)
+            
+            cv2.imshow('frame', frame)
+            cv2.waitKey(1)
+        # --------------------------------
+
         # 3. Recording Phase
         counter = 0
-        last_save_time = time.time()
+        last_save_time = time.time() # This starts the timer for the *second* photo (first one happens after delay)
         
+        # NOTE: If you want the FIRST photo to happen IMMEDIATELY after "Get Ready",
+        # change the line above to: last_save_time = time.time() - capture_delay
+
         while counter < dataset_size:
             ret, frame = cap.read()
             if not ret:
                 break
             
-            # --- DISPLAY INFO ON SCREEN ---
-            
-            # Show the Counter (How many captured so far)
+            # Show the Counter
             cv2.putText(frame, f"Captured: {counter} / {dataset_size}", (30, 50), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2) # White text
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
 
-            # Show Countdown to next photo (Optional but helpful)
+            # Show Countdown to next photo
             time_passed = time.time() - last_save_time
             time_left = max(0, capture_delay - time_passed)
             
-            # Change color to RED if about to snap, GREEN if waiting
             timer_color = (0, 0, 255) if time_left < 0.5 else (0, 255, 0)
             
             cv2.putText(frame, f"Next photo: {time_left:.1f}s", (30, 100), 
@@ -67,14 +86,13 @@ while True:
             cv2.imshow('frame', frame)
             cv2.waitKey(25)
 
-            # --- SAVE LOGIC ---
+            # Save Logic
             if time_passed >= capture_delay:
-                # Save the image
                 save_path = os.path.join(class_dir, '{}.jpg'.format(counter))
                 cv2.imwrite(save_path, frame)
                 
                 counter += 1
-                last_save_time = time.time() # Reset timer
+                last_save_time = time.time()
                 print(f"Saved {save_path}")
         
         print(f"Finished recording class {j}.\n")
