@@ -2,7 +2,7 @@ import cv2
 import av
 import numpy as np
 import mediapipe as mp
-# Direct import to fix the AttributeError on Python 3.13
+# Direct imports to fix the AttributeError on Python 3.12/3.13
 from mediapipe.python.solutions import hands as mp_hands
 from mediapipe.python.solutions import drawing_utils as mp_drawing
 import streamlit as st
@@ -10,37 +10,39 @@ from streamlit_webrtc import webrtc_streamer, WebRtcMode
 import pickle
 import queue
 
-# --- 1. STABLE CONFIG ---
+# --- 1. PAGE CONFIG ---
 st.set_page_config(page_title="Neural View Stable", layout="wide")
 
 # --- 2. THREAD-SAFE STORAGE ---
+# result_queue allows the video thread to send text to the UI thread without freezing
 if "result_queue" not in st.session_state:
     st.session_state.result_queue = queue.Queue()
 if "text_out" not in st.session_state:
     st.session_state.text_out = ""
 
-# --- 3. MODEL LOAD ---
+# --- 3. LOAD MODEL ---
 @st.cache_resource
 def load_vision_model():
     try:
-        # Source uses './model.p'
+        # Based on your file structure
         with open('./model.p', 'rb') as f:
-            return pickle.load(f)['model']
+            model_dict = pickle.load(f)
+            return model_dict['model']
     except Exception as e:
-        st.error(f"Model Load Error: {e}")
+        st.error(f"Model Load Error: {e}. Ensure 'model.p' is in the root folder.")
         return None
 
 model = load_vision_model()
 
-# --- 4. FIXED PROCESSOR ---
+# --- 4. VIDEO PROCESSOR CLASS ---
 class StableProcessor:
     def __init__(self):
-        # Initializing hands using the fixed direct import
+        # Initialize hands once at start to save CPU
         self.hands = mp_hands.Hands(
             static_image_mode=False,
             max_num_hands=1,
             min_detection_confidence=0.7,
-            model_complexity=0 
+            model_complexity=0  # Use 0 for fastest performance on cloud
         )
         self.labels = {i: chr(65+i) for i in range(26)}
         self.prev = ""
@@ -53,18 +55,19 @@ class StableProcessor:
 
         if results.multi_hand_landmarks:
             hand_landmarks = results.multi_hand_landmarks[0]
-            # Using direct import for drawing
             mp_drawing.draw_landmarks(img, hand_landmarks, mp_hands.HAND_CONNECTIONS)
 
+            # Feature Extraction
             data_aux = []
             x_ = [lm.x for lm in hand_landmarks.landmark]
             y_ = [lm.y for lm in hand_landmarks.landmark]
+            
             for lm in hand_landmarks.landmark:
                 data_aux.append(lm.x - min(x_))
                 data_aux.append(lm.y - min(y_))
 
             if model:
-                # Pad/Slice to 84 features
+                # Ensure input length matches your model's expected 84 features
                 input_data = np.asarray(data_aux[:84])
                 if len(input_data) < 84:
                     input_data = np.pad(input_data, (0, 84 - len(input_data)))
@@ -73,6 +76,7 @@ class StableProcessor:
                     prediction = model.predict([input_data])[0]
                     char = self.labels.get(int(prediction), "?")
 
+                    # Logic to "lock in" a character after 15 matching frames
                     if char == self.prev:
                         self.frames += 1
                     else:
@@ -80,6 +84,7 @@ class StableProcessor:
                         self.prev = char
 
                     if self.frames == 15:
+                        # Put recognized char into the queue for the UI to find
                         st.session_state.result_queue.put(char)
                         self.frames = 0
                     
@@ -89,13 +94,14 @@ class StableProcessor:
 
         return av.VideoFrame.from_ndarray(img, format="bgr24")
 
-# --- 5. UI LAYOUT ---
-st.title("VisionAI Sign Translator")
+# --- 5. INTERFACE ---
+st.title("Neural View Translation")
 col_vid, col_txt = st.columns([3, 2])
 
 with col_vid:
-    webrtc_streamer(
-        key="stable-stream",
+    # Key change: async_processing=True prevents the UI from locking up
+    ctx = webrtc_streamer(
+        key="neural-view",
         mode=WebRtcMode.SENDRECV,
         video_processor_factory=StableProcessor,
         async_processing=True,
@@ -103,12 +109,15 @@ with col_vid:
         media_stream_constraints={"video": True, "audio": False},
     )
 
+# Pull any new text from the background queue into the UI state
 while not st.session_state.result_queue.empty():
-    st.session_state.text_out += st.session_state.result_queue.get() + " "
+    st.session_state.text_out += st.session_state.result_queue.get()
 
 with col_txt:
-    st.subheader("Transcription")
-    st.info(st.session_state.text_out if st.session_state.text_out else "Awaiting signs...")
-    if st.button("Clear"):
+    st.subheader("📝 Translated Text")
+    # Display the final string
+    st.info(st.session_state.text_out if st.session_state.text_out else "Waiting for hand sign...")
+    
+    if st.button("✨ Clear Text", use_container_width=True):
         st.session_state.text_out = ""
-        st.rerun()
+        st.rerun() # Forces a clean UI refresh
