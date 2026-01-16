@@ -2,6 +2,9 @@ import cv2
 import av
 import numpy as np
 import mediapipe as mp
+# Direct import to fix the AttributeError on Python 3.13
+from mediapipe.python.solutions import hands as mp_hands
+from mediapipe.python.solutions import drawing_utils as mp_drawing
 import streamlit as st
 from streamlit_webrtc import webrtc_streamer, WebRtcMode
 import pickle
@@ -20,6 +23,7 @@ if "text_out" not in st.session_state:
 @st.cache_resource
 def load_vision_model():
     try:
+        # Source uses './model.p'
         with open('./model.p', 'rb') as f:
             return pickle.load(f)['model']
     except Exception as e:
@@ -31,15 +35,13 @@ model = load_vision_model()
 # --- 4. FIXED PROCESSOR ---
 class StableProcessor:
     def __init__(self):
-        # Initialize MediaPipe once
-        self.mp_hands = mp.solutions.hands
-        self.hands = self.mp_hands.Hands(
+        # Initializing hands using the fixed direct import
+        self.hands = mp_hands.Hands(
             static_image_mode=False,
             max_num_hands=1,
             min_detection_confidence=0.7,
-            model_complexity=0  # Simplest version for zero-lag
+            model_complexity=0 
         )
-        self.mp_drawing = mp.solutions.drawing_utils
         self.labels = {i: chr(65+i) for i in range(26)}
         self.prev = ""
         self.frames = 0
@@ -51,9 +53,9 @@ class StableProcessor:
 
         if results.multi_hand_landmarks:
             hand_landmarks = results.multi_hand_landmarks[0]
-            self.mp_drawing.draw_landmarks(img, hand_landmarks, self.mp_hands.HAND_CONNECTIONS)
+            # Using direct import for drawing
+            mp_drawing.draw_landmarks(img, hand_landmarks, mp_hands.HAND_CONNECTIONS)
 
-            # Feature Extraction
             data_aux = []
             x_ = [lm.x for lm in hand_landmarks.landmark]
             y_ = [lm.y for lm in hand_landmarks.landmark]
@@ -62,7 +64,7 @@ class StableProcessor:
                 data_aux.append(lm.y - min(y_))
 
             if model:
-                # Pad/Slice to exactly 84 features
+                # Pad/Slice to 84 features
                 input_data = np.asarray(data_aux[:84])
                 if len(input_data) < 84:
                     input_data = np.pad(input_data, (0, 84 - len(input_data)))
@@ -78,7 +80,6 @@ class StableProcessor:
                         self.prev = char
 
                     if self.frames == 15:
-                        # Send to UI safely via Queue
                         st.session_state.result_queue.put(char)
                         self.frames = 0
                     
@@ -97,12 +98,11 @@ with col_vid:
         key="stable-stream",
         mode=WebRtcMode.SENDRECV,
         video_processor_factory=StableProcessor,
-        async_processing=True, # Prevents UI freezing
+        async_processing=True,
         rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
         media_stream_constraints={"video": True, "audio": False},
     )
 
-# Logic to pull from queue and update UI
 while not st.session_state.result_queue.empty():
     st.session_state.text_out += st.session_state.result_queue.get() + " "
 
